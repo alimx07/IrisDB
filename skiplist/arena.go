@@ -20,9 +20,8 @@ type Arena struct {
 const (
 	nodeLevelSize = uint32(unsafe.Sizeof(atomic.Uint32{}))
 	MaxSize       = uint32(unsafe.Sizeof(Node{}))
+	// align         = uint32(unsafe.Alignof(atomic.Uint32{})) - 1
 )
-
-type offsetType = uint32
 
 func NewArena(n uint32) *Arena {
 
@@ -33,27 +32,28 @@ func NewArena(n uint32) *Arena {
 }
 
 // alloc space for node and return the start offset
-func (arena *Arena) allocNode(h uint32) offsetType {
+func (arena *Arena) allocNode(h uint32) uint32 {
 
 	// size of Node
-	sz := MaxSize - (nodeLevelSize * (MaxHeight - h))
+	// -1 as our h starts from 0
+	sz := MaxSize - ((MaxHeight - h - 1) * nodeLevelSize)
+
 	newLoc := arena.loc.Add(sz)
 	startLoc := newLoc - sz
 	return startLoc
 }
 
 // return the start offset of key loc
-func (arena *Arena) setNodeKey(k db.Key) offsetType {
-	sz := k.GetSize()
+func (arena *Arena) setNodeKey(k db.Key) uint32 {
+	sz := uint32(k.GetSize())
 	newLoc := arena.loc.Add(sz)
 	startLoc := newLoc - sz
-	// println("Store", string(k.GetKey()))
 	copy(arena.buf[startLoc:startLoc+sz], k.GetKey())
 	return startLoc
 }
 
 // return the start offset of val loc
-func (arena *Arena) setNodeVal(v db.Value) offsetType {
+func (arena *Arena) setNodeVal(v db.Value) uint32 {
 	sz := v.GetSize()
 	newLoc := arena.loc.Add(sz)
 	startLoc := newLoc - sz
@@ -69,7 +69,7 @@ func (arena *Arena) getItem(loc, sz uint32) []byte {
 	return arena.buf[loc : loc+sz]
 }
 
-func (arena *Arena) getNodeOffset(node *Node) offsetType {
+func (arena *Arena) getNodeOffset(node *Node) uint32 {
 	if node == nil {
 		return 0 // nil offset
 	}

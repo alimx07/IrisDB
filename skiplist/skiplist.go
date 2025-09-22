@@ -2,24 +2,27 @@ package skiplist
 
 import (
 	"irisdb/db"
-	"math/rand"
+	"math"
 	"sync/atomic"
+	_ "unsafe"
 )
 
 const (
-	Mod = 2
-
 	MaxHeight = 16
 )
 
-type Node struct {
+// P(H Increase) = 1/3
+var LogP float64 = math.Log(1 - (1.0 / 3))
 
-	// offset(0:31) - size(32:63)
-	// sameKey--> multiple values now
-	//TODO: overwrite value (atomic)
-	// Can overwrite key also ??
-	key      uint64
-	val      uint64
+type Node struct {
+	// key size 16B --> 64KB
+	// val size 32B --> 4GB (avg 1-4KB)
+	// key&val off 32B  --> (Arena MaxSize)
+	keysize uint16
+	keyoff  uint32
+	valsize uint32
+	valoff  uint32
+
 	topLevel uint32
 
 	next [MaxHeight]atomic.Uint32
@@ -35,12 +38,11 @@ type Node struct {
 func newNode(arena *Arena, level uint32, k db.Key, v db.Value) *Node {
 	startLoc := arena.allocNode(level)
 	node := (*Node)(arena.getNodePointer(startLoc))
-	// c := EncodeItem(k.GetSize(), arena.setNodeKey(k))
-	// println("TTT", c)
-	node.key = EncodeItem(k.GetSize(), arena.setNodeKey(k))
-	node.val = EncodeItem(v.GetSize(), arena.setNodeVal(v))
+	node.keyoff = arena.setNodeKey(k)
+	node.keysize = uint16(k.GetSize())
+	node.valoff = arena.setNodeVal(v)
+	node.valsize = v.GetSize()
 	node.topLevel = level
-	// println(unsafe.Pointer(node))
 	return node
 }
 
@@ -48,6 +50,7 @@ type SkipList struct {
 	arena  *Arena
 	head   *Node
 	height atomic.Int32
+	// prob   [MaxHeight]float32
 }
 
 func NewSkipList(sz uint32) *SkipList {
@@ -61,7 +64,6 @@ func NewSkipList(sz uint32) *SkipList {
 }
 
 func (sl *SkipList) Get(k db.Key) db.Value {
-	// println(string(k.GetKey()))
 
 	level := sl.height.Load()
 	curr := sl.head
@@ -72,9 +74,7 @@ func (sl *SkipList) Get(k db.Key) db.Value {
 		if len(nextKey) == 0 {
 			if level == 0 {
 				currKey := curr.getKey(sl.arena)
-				// println("curr", string(currKey))
-				if len(currKey) != 0 && db.CompareRawKeys(db.NewPrevKey(currKey), k) == 0 {
-					// println("val curr", string(curr.getVal(sl.arena)))
+				if len(currKey) != 0 && db.CompareRawKeys(db.PrevKey(currKey), k) == 0 {
 					return db.NewValue(curr.getVal(sl.arena))
 				} else {
 					break
@@ -83,7 +83,7 @@ func (sl *SkipList) Get(k db.Key) db.Value {
 			level--
 			continue
 		}
-		cmp := db.CompareRawKeys(db.NewPrevKey(nextKey), k)
+		cmp := db.CompareKeys(db.PrevKey(nextKey), k)
 		if cmp >= 0 {
 			if level > 0 {
 				level--
@@ -102,86 +102,87 @@ func (sl *SkipList) Get(k db.Key) db.Value {
 
 func (sl *SkipList) Insert(k db.Key, v db.Value) {
 
-	toplevel := randomLevel()
+	toplevel := sl.randomLevel()
 	node := newNode(sl.arena, uint32(toplevel), k, v)
 	// println(unsafe.Pointer(node))
 	sl.checkHeight(int32(toplevel))
 
 	var prev, succ [MaxHeight]*Node
+	sl.findALLBounds(k, &prev, &succ)
 	// start link
+	// println(toplevel, sl.height.Load())
 	for level := 0; level <= toplevel; level++ {
 		for {
-			if prev[level] == nil {
-				prev[level], succ[level] = sl.find(k, uint32(level), sl.head)
-			}
 			succOff := sl.arena.getNodeOffset(succ[level])
 			node.next[level].Store(succOff)
+			// println("L", level)
 			ok := prev[level].next[level].CompareAndSwap(succOff, sl.arena.getNodeOffset(node))
 			if ok {
 				break
 			}
-			prev[level], succ[level] = sl.find(k, uint32(level), sl.head)
+			// the switch of links failed in this case (new X):
+			// prev          succ
+			//     \       /
+			//      X    curr
+			// So prev do not point to succ anymore
+			// Do search again just from prev to find new prev and succ for curr for this level
+			// it is like a search finger
+			prev[level], succ[level] = sl.findBoundsForLevel(k, uint32(level), prev[level])
 		}
 	}
 }
 
-// search for prev and succ of key on specific level
-// I will search by level as optimization:
-// --> Node can be found in higher level
-// --> avoid going down with no benefit
-func (sl *SkipList) find(k db.Key, level uint32, startNode *Node) (*Node, *Node) {
-	if startNode == nil {
-		startNode = sl.head
-	}
-	prev := startNode
+// func (sl *SkipList) findFromFinger(k db.Key , level , )
+
+// search for prev and succ of key for specific level
+func (sl *SkipList) findBoundsForLevel(k db.Key, level uint32, prev *Node) (*Node, *Node) {
 	for {
-		// println("Try")
-		// get offset of next in arena
 		succOff := prev.next[level].Load()
+
+		// we reach end of the level
 		if succOff == 0 {
 			return prev, nil
 		}
 		succ := (*Node)(sl.arena.getNodePointer(succOff))
-		// println("OFF", succOff)
-		// println("VAL", succ.val)
-		// find key
-		keyMetaData := succ.key
+		loc, sz := succ.keyoff, succ.keysize
 
-		// println("DATA", keyMetaData)
-		loc, sz := DecondeItem(keyMetaData)
-		currKey := sl.arena.getItem(loc, sz)
-		// println(currKey)
-		cmp := db.CompareKeys(k, db.NewPrevKey(currKey))
-		// println(cmp)
-		if cmp == 0 {
-			return succ, succ
-		}
-		if cmp < 0 {
-			// println("IN")
+		currKey := sl.arena.getItem(loc, uint32(sz))
+		cmp := db.CompareKeys(k, db.PrevKey(currKey))
+
+		// next node is higher/equal curr
+		// we found our bounds
+		if cmp <= 0 {
 			return prev, succ
 		}
+
 		prev = succ
 	}
 }
-func EncodeItem(size, loc uint32) uint64 {
-	// println("ENCODE", loc, "  ", size)/
-	return uint64(size)<<32 | uint64(loc)
-}
 
-func DecondeItem(encodedkey uint64) (uint32, uint32) {
-	loc := uint32(encodedkey)
-	sz := uint32(encodedkey >> 32)
-	return loc, sz
-}
+// search for prev and succ of key for all levels
+func (sl *SkipList) findALLBounds(k db.Key, prev, succ *[MaxHeight]*Node) {
+	h := uint32(sl.height.Load())
 
-func randomLevel() int {
-	h := 0
-	for {
-		if h == MaxHeight-1 || rand.Int()%Mod == 0 {
+	// top most level
+	prev[h], succ[h] = sl.findBoundsForLevel(k, h, sl.head)
+	// println("ff", h)
+	for level := h - 1; ; {
+		// use last level prev to start search
+		// O(log n) property of skiplist
+		// println(level)
+		prev[level], succ[level] = sl.findBoundsForLevel(k, h, prev[level+1])
+		// println(prev[level] == nil)
+		if level == 0 {
 			break
 		}
-		h++
+		level--
 	}
+}
+
+func (sl *SkipList) randomLevel() int {
+	u := float64(fastRandomNum()+1) / (1 << 32)
+	h := 1 + int(math.Floor(math.Log(u)/LogP))
+	h = min(h, MaxHeight-1)
 	return h
 }
 
@@ -203,11 +204,24 @@ func (node *Node) getNextNode(level int, arena *Arena) *Node {
 }
 
 func (node *Node) getKey(arena *Arena) []byte {
-	key := node.key
-	return arena.getItem(DecondeItem(key))
+	loc := node.keyoff
+	sz := node.keysize
+	return arena.getItem(loc, uint32(sz))
 }
 
 func (node *Node) getVal(arena *Arena) []byte {
-	val := node.val
-	return arena.getItem(DecondeItem(val))
+	loc := node.valoff
+	sz := node.valsize
+	return arena.getItem(loc, sz)
 }
+
+// func newProbTable(arena *Arena) {
+// 	loc := arena.allocTable()
+// 	for i := range MaxHeight {
+// 		p := math.Pow(P , float64(i))
+
+// 	}
+// }
+
+//go:linkname fastRandomNum runtime.fastrand
+func fastRandomNum() uint32
