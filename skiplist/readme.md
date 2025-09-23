@@ -6,17 +6,17 @@ OS/Arch: **linux/amd64**
 ```text
 pkg: irisdb/skiplist
 
-BenchmarkInsert/Value-16B-12         	 4105694	       366.3 ns/op
-BenchmarkInsert/Value-128B-12        	 3670724	       388.4 ns/op
-BenchmarkInsert/Value-512B-12        	 3413232	       427.1 ns/op
+BenchmarkInsert/Value-16B-12         	 5758156	       290.1 ns/op
+BenchmarkInsert/Value-128B-12        	 5229015	       309.0 ns/op
+BenchmarkInsert/Value-512B-12        	 4541200	       334.2 ns/op
 
-BenchmarkGet/Value-16B-12            	23967844	        56.55 ns/op
-BenchmarkGet/Value-128B-12           	24281823	        48.33 ns/op
-BenchmarkGet/Value-512B-12           	25544679	        52.92 ns/op
+BenchmarkGet/Value-16B-12            	37226019	        34.52 ns/op
+BenchmarkGet/Value-128B-12           	31623740	        36.27 ns/op
+BenchmarkGet/Value-512B-12           	30642248	        35.68 ns/op
 
-BenchmarkMixed/Write-Heavy-12        	 4819551	       312.1 ns/op
-BenchmarkMixed/Read-Heavy-12         	 8378656	       207.7 ns/op
-BenchmarkMixed/Write-Read-12         	 5875960	       261.2 ns/op
+BenchmarkMixed/Write-Heavy-12        	 7083886	       250.4 ns/op
+BenchmarkMixed/Read-Heavy-12         	11627131	       157.0 ns/op
+BenchmarkMixed/Write-Read-12         	 8928442	       204.2 ns/op
 
 PASS
 ok  	irisdb/skiplist	30.563s
