@@ -10,11 +10,9 @@ import (
 type Arena struct {
 	// the actual buffer
 	buf []byte
-
 	// loc represent curr position inside buf
 	// uint32 can support up to 2^32 = 4GB
 	loc atomic.Uint32
-	// len atomic.Uint32
 }
 
 const (
@@ -31,38 +29,31 @@ func NewArena(n uint32) *Arena {
 	return arena
 }
 
-// alloc space for node and return the start offset
-func (arena *Arena) allocNode(h uint32) uint32 {
+// alloc space for node and return the starts offset as nodeLoc , KeyLoc , ValueLoc
+func (arena *Arena) allocNode(h uint32, k []byte, v db.Value) (uint32, uint32, uint32) {
 
-	// size of Node
+	// size of Node , key , value
 	// -1 as our h starts from 0
 	sz := MaxSize - ((MaxHeight - h - 1) * nodeLevelSize)
+	ks := uint32(len(k))
+	vs := v.GetSize()
 
 	// ensure that arena is 4 byte alignment
 	// as we will load and store in next atomically
-	deltaLoc := sz + align
+	// size of all our data
+	deltaLoc := sz + ks + vs + align
 	newLoc := arena.loc.Add(deltaLoc)
-	// arena.len.Add(1)
-	startLoc := (newLoc - sz) & ^align
-	return startLoc
-}
 
-// alloc space for key and eturn the start offset
-func (arena *Arena) setNodeKey(k []byte) uint32 {
-	sz := uint32(len(k))
-	newLoc := arena.loc.Add(sz)
-	startLoc := newLoc - sz
-	copy(arena.buf[startLoc:startLoc+sz], k)
-	return startLoc
-}
+	// start locations
+	startLoc := (newLoc - (sz + ks + vs)) & ^align
+	keyLoc := startLoc + sz
+	valLoc := keyLoc + ks
 
-// alloc space for value and return the start offset
-func (arena *Arena) setNodeVal(v db.Value) uint32 {
-	sz := v.GetSize()
-	newLoc := arena.loc.Add(sz)
-	startLoc := newLoc - sz
-	copy(arena.buf[startLoc:startLoc+sz], v.GetValue())
-	return startLoc
+	// copy key & value into buf
+	copy(arena.buf[keyLoc:keyLoc+ks], k)
+	copy(arena.buf[valLoc:valLoc+vs], v.GetValue())
+
+	return startLoc, keyLoc, valLoc
 }
 
 func (arena *Arena) getNodePointer(nodeLoc uint32) unsafe.Pointer {

@@ -50,11 +50,11 @@ type Node struct {
 // }
 
 func newNode(arena *Arena, level uint32, k []byte, v db.Value) *Node {
-	startLoc := arena.allocNode(level)
+	startLoc, keyLoc, valLoc := arena.allocNode(level, k, v)
 	node := (*Node)(arena.getNodePointer(startLoc))
-	node.keyoff = arena.setNodeKey(k)
+	node.keyoff = keyLoc
 	node.keysize = uint16(len(k))
-	node.valoff = arena.setNodeVal(v)
+	node.valoff = valLoc
 	node.valsize = v.GetSize()
 	node.topLevel = level
 	return node
