@@ -8,19 +8,19 @@ import (
 
 // Arena is bump allocator
 type Arena struct {
-
-	// loc represent curr position inside buf
-	// unint32 can support up to 2^32 = 4GB
-	loc atomic.Uint32
-
 	// the actual buffer
 	buf []byte
+
+	// loc represent curr position inside buf
+	// uint32 can support up to 2^32 = 4GB
+	loc atomic.Uint32
+	// len atomic.Uint32
 }
 
 const (
 	nodeLevelSize = uint32(unsafe.Sizeof(atomic.Uint32{}))
 	MaxSize       = uint32(unsafe.Sizeof(Node{}))
-	// align         = uint32(unsafe.Alignof(atomic.Uint32{})) - 1
+	align         = uint32(unsafe.Alignof(atomic.Uint32{})) - 1
 )
 
 func NewArena(n uint32) *Arena {
@@ -38,21 +38,25 @@ func (arena *Arena) allocNode(h uint32) uint32 {
 	// -1 as our h starts from 0
 	sz := MaxSize - ((MaxHeight - h - 1) * nodeLevelSize)
 
-	newLoc := arena.loc.Add(sz)
-	startLoc := newLoc - sz
+	// ensure that arena is 4 byte alignment
+	// as we will load and store in next atomically
+	deltaLoc := sz + align
+	newLoc := arena.loc.Add(deltaLoc)
+	// arena.len.Add(1)
+	startLoc := (newLoc - sz) & ^align
 	return startLoc
 }
 
-// return the start offset of key loc
-func (arena *Arena) setNodeKey(k db.Key) uint32 {
-	sz := uint32(k.GetSize())
+// alloc space for key and eturn the start offset
+func (arena *Arena) setNodeKey(k []byte) uint32 {
+	sz := uint32(len(k))
 	newLoc := arena.loc.Add(sz)
 	startLoc := newLoc - sz
-	copy(arena.buf[startLoc:startLoc+sz], k.GetKey())
+	copy(arena.buf[startLoc:startLoc+sz], k)
 	return startLoc
 }
 
-// return the start offset of val loc
+// alloc space for value and return the start offset
 func (arena *Arena) setNodeVal(v db.Value) uint32 {
 	sz := v.GetSize()
 	newLoc := arena.loc.Add(sz)
