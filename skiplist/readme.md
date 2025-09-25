@@ -18,5 +18,9 @@ BenchmarkMixed/Write-Heavy-12        	 7083886	       250.4 ns/op
 BenchmarkMixed/Read-Heavy-12         	11627131	       157.0 ns/op
 BenchmarkMixed/Write-Read-12         	 8928442	       204.2 ns/op
 
+BenchmarkInsertSequentially/Value-16B-12         	 5125440	       201.3 ns/op
+BenchmarkInsertSequentially/Value-256B-12        	 5183389	       211.3 ns/op
+BenchmarkInsertSequentially/Value-512B-12        	 5019553	       221.1 ns/op
+
 PASS
 ok  	irisdb/skiplist	30.563s
