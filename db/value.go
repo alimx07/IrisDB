@@ -9,7 +9,7 @@ func NewValue(v []byte) Value {
 }
 
 func (v Value) GetValue() []byte {
-	return v.val
+	return v.val[:]
 }
 
 func (v Value) GetSize() uint32 {

@@ -6,57 +6,36 @@ import (
 	"time"
 )
 
-type Key struct {
-	key []byte
-}
-
 const (
-
 	// len TimeStamp in bytes
 	lenTs = 8
 )
 
 // key operations
+// New functions will be added
 
-func NewKey(k []byte) Key {
+func NewKey(k []byte) []byte {
 	t := time.Now().UnixMicro()
-	return Key{
-		key: binary.BigEndian.AppendUint64(k, uint64(t)),
+	return binary.BigEndian.AppendUint64(k, uint64(t))
+
+}
+
+func CompareRawKeys(k1, k2 []byte) int {
+
+	// handle case of nil pointer of head
+	if len(k1) < lenTs {
+		return -1
 	}
+	return bytes.Compare(k1[:len(k1)-lenTs], k2[:len(k2)-lenTs])
 }
 
-func NewPrevKey(k []byte) Key {
-	return Key{key: k}
-}
-func (k Key) GetSize() uint32 {
-	return uint32(len(k.key))
-}
-
-func (k Key) GetKey() []byte {
-	return k.key
+func CompareKeysTs(k1, k2 []byte) int {
+	// negative to sort by Ts desc
+	// which means getNewKeys entires frist will search
+	return -bytes.Compare(k1[len(k1)-lenTs:], k2[len(k2)-lenTs:])
 }
 
-func (k Key) GetRawKey() []byte {
-	// println(len(k.key), len(k.GetKey()), len(k.GetKey())-lenTs)
-	return k.key[:k.GetSize()-lenTs]
-}
-func (k Key) GetTsUint64() uint64 {
-	return binary.BigEndian.Uint64(k.key[k.GetSize()-lenTs:])
-}
-
-func (k Key) GetTsBytes() []byte {
-	return k.key[k.GetSize()-lenTs:]
-}
-
-func CompareRawKeys(k1, k2 Key) int {
-	return bytes.Compare(k1.GetRawKey(), k2.GetRawKey())
-}
-
-func CompareKeysTs(k1, k2 Key) int {
-	return -bytes.Compare(k1.GetTsBytes(), k2.GetTsBytes())
-}
-
-func CompareKeys(k1, k2 Key) int {
+func CompareKeys(k1, k2 []byte) int {
 	cmp := CompareRawKeys(k1, k2)
 	if cmp == 0 {
 		return CompareKeysTs(k1, k2)
