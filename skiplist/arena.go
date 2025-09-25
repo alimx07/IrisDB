@@ -2,11 +2,12 @@ package skiplist
 
 import (
 	"irisdb/db"
+	"math"
 	"sync/atomic"
 	"unsafe"
 )
 
-// Arena is bump allocator
+// Arena is a bump allocator
 type Arena struct {
 	// the actual buffer
 	buf []byte
@@ -30,11 +31,18 @@ func NewArena(n uint32) *Arena {
 }
 
 // alloc space for node and return the starts offset as nodeLoc , KeyLoc , ValueLoc
-func (arena *Arena) allocNode(h uint32, k []byte, v db.Value) (uint32, uint32, uint32) {
+func (arena *Arena) allocNode(h uint32, k []byte, v db.Value) (uint32, uint32, uint32, error) {
+
+	// Storing node metadata + key + value sequentially
+	// brings better data locallity (more cache hits)
+	// and faster bringing for data especially small size ones
 
 	// size of Node , key , value
 	// -1 as our h starts from 0
 	sz := MaxSize - ((MaxHeight - h - 1) * nodeLevelSize)
+	if sz > arena.getSize() {
+		return 0, 0, 0, ErrSizeFull
+	}
 	ks := uint32(len(k))
 	vs := v.GetSize()
 
@@ -53,7 +61,7 @@ func (arena *Arena) allocNode(h uint32, k []byte, v db.Value) (uint32, uint32, u
 	copy(arena.buf[keyLoc:keyLoc+ks], k)
 	copy(arena.buf[valLoc:valLoc+vs], v.GetValue())
 
-	return startLoc, keyLoc, valLoc
+	return startLoc, keyLoc, valLoc, nil
 }
 
 func (arena *Arena) getNodePointer(nodeLoc uint32) unsafe.Pointer {
@@ -71,4 +79,8 @@ func (arena *Arena) getNodeOffset(node *Node) uint32 {
 	nodeOff := uintptr(unsafe.Pointer(node)) - uintptr(arena.getNodePointer(0))
 	// println(uint32(nodeOff))
 	return uint32(nodeOff)
+}
+
+func (arena *Arena) getSize() uint32 {
+	return math.MaxUint32 - arena.loc.Load()
 }
