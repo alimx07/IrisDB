@@ -15,7 +15,7 @@ const (
 // New functions will be added
 
 func NewKey(k []byte) []byte {
-	t := time.Now().UnixMicro()
+	t := time.Now().UnixNano()
 	return binary.BigEndian.AppendUint64(k, uint64(t))
 
 }
@@ -32,7 +32,7 @@ func CompareRawKeys(k1, k2 []byte) int {
 func CompareKeysTs(k1, k2 []byte) int {
 	// negative to sort by Ts desc
 	// which means getNewKeys entires frist will search
-	return -bytes.Compare(k1[len(k1)-lenTs:], k2[len(k2)-lenTs:])
+	return -(bytes.Compare(k1[len(k1)-lenTs:], k2[len(k2)-lenTs:]))
 }
 
 func CompareKeys(k1, k2 []byte) int {
@@ -41,4 +41,9 @@ func CompareKeys(k1, k2 []byte) int {
 		return CompareKeysTs(k1, k2)
 	}
 	return cmp
+}
+
+func GetTsAsUint64(k []byte) uint64 {
+	ts := binary.BigEndian.Uint64(k[len(k)-lenTs:])
+	return ts
 }
