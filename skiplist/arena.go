@@ -1,10 +1,11 @@
 package skiplist
 
 import (
-	"irisdb/db"
 	"math"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/alimx07/IrisDB/db"
 )
 
 // Arena is a bump allocator
