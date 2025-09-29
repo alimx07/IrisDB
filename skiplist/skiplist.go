@@ -24,8 +24,9 @@ const (
 var LogP float64 = math.Log(1 - (1.0 / math.E))
 
 var (
-	ErrNilHint  = errors.New("nil hint. Make sure to intiallize the hint befor passing")
-	ErrSizeFull = errors.New("no enough size for the insertion")
+	ErrNilHint         = errors.New("nil hint. Make sure to intiallize the hint befor passing")
+	ErrSizeFull        = errors.New("no enough size for the insertion")
+	ErrStillReferenced = errors.New("skiplist still referenced by one or more goroutines")
 )
 
 type Node struct {
@@ -150,7 +151,6 @@ func (sl *SkipList) InsertWithHints(k []byte, v db.Value, hint *Hint) error {
 			hint and the inserted node.
 
 	*/
-
 	if hint == nil {
 		return ErrNilHint
 	}
@@ -268,7 +268,7 @@ func (sl *SkipList) seek(k []byte, ts uint64) (*Node, bool) {
 
 			// IF we reach level 0 and did not find the node
 			// in this case we already on node.key > key
-			// Loop until we found node.ts > ts
+			// Loop until we found node.ts <= ts
 			for {
 				nxNode = nxNode.nextNode(0, sl.arena)
 				if nxNode == nil {
@@ -306,6 +306,18 @@ func (sl *SkipList) checkHeight(level int32) int32 {
 
 func (sl *SkipList) GetSize() uint32 {
 	return sl.arena.getSize()
+}
+
+func (sl *SkipList) Close() error {
+	if sl.ref.Load() > 0 {
+		return ErrStillReferenced
+	}
+
+	// remove any references for arena to make GC Free it
+	sl.arena = nil
+	sl.head = nil
+
+	return nil
 }
 
 func (node *Node) getNextNode(level int, arena *Arena) *Node {
