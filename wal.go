@@ -85,14 +85,14 @@ func (w *WAL) serializeEntry(entry *LogEntry) []byte {
 
 func (w *WAL) deserializeEntry(data []byte) *LogEntry {
 	op := data[0]
-	keyLen := binary.BigEndian.Uint32(data[1:5])
-	valueLen := binary.BigEndian.Uint32(data[5:9])
+	keyLen := binary.BigEndian.Uint32(data[1:3])
+	valueLen := binary.BigEndian.Uint32(data[3:7])
 
 	key := make([]byte, keyLen)
 	value := make([]byte, valueLen)
 
-	copy(key, data[9:9+keyLen])
-	copy(value, data[9+keyLen:9+keyLen+valueLen])
+	copy(key, data[7:9+keyLen])
+	copy(value, data[7+keyLen:7+keyLen+valueLen])
 
 	return &LogEntry{
 		Op:    op,
