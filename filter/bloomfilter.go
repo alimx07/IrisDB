@@ -1,6 +1,8 @@
-package irisdb
+package filter
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
 	"math"
 
@@ -68,4 +70,18 @@ func (bf *Bloomfilter) Contains(data []byte) bool {
 		}
 	}
 	return true // maybe
+}
+
+func BytesTOSTruct(buf bytes.Buffer) *Bloomfilter {
+	dec := gob.NewDecoder(&buf)
+
+	var bf *Bloomfilter
+	dec.Decode(bf)
+	return bf
+}
+
+func (bf *Bloomfilter) StructToBytes(buf bytes.Buffer) error {
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(&bf)
+	return err
 }
