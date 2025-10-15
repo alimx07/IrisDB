@@ -4,6 +4,7 @@
 package skiplist
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"sync/atomic"
@@ -385,8 +386,14 @@ func (it *Iterator) Seek(k []byte) {
 	it.cursor, _ = it.sl.seek(k, it.ts)
 }
 
+// Get Value of current Key
 func (it *Iterator) Get() []byte {
 	return it.cursor.getVal(it.sl.arena)
+}
+
+// Get curr Key
+func (it *Iterator) GetKey() []byte {
+	return it.cursor.getKey(it.sl.arena)
 }
 
 // GO to the next node
@@ -416,6 +423,46 @@ func (it *Iterator) SeekToStart() {
 func (it *Iterator) Close() {
 	it.sl.ref.Add(-1)
 	it = nil
+}
+
+// Merge Two Frozen memtables
+type MergeIterator struct {
+	first  *Iterator
+	second *Iterator
+}
+
+func NewMergeIterator(mem1, mem2 *SkipList) *MergeIterator {
+	it1 := Newiterator(mem1)
+	it2 := Newiterator(mem2)
+	it1.SeekToStart()
+	it2.SeekToStart()
+	return &MergeIterator{first: it1, second: it2}
+}
+
+func (mems MergeIterator) Next() []byte {
+	if !mems.first.Valid() && !mems.second.Valid() {
+		return nil
+	}
+	// one side exhausted
+	if !mems.first.Valid() {
+		v := mems.second.Get()
+		mems.second.Next()
+		return v
+	}
+	if !mems.second.Valid() {
+		v := mems.first.Get()
+		mems.first.Next()
+		return v
+	}
+
+	if bytes.Compare(mems.first.GetKey(), mems.second.GetKey()) <= 0 {
+		v := mems.first.Get()
+		mems.first.Next()
+		return v
+	}
+	v := mems.second.Get()
+	mems.second.Next()
+	return v
 }
 
 //go:linkname fastRandomNum runtime.fastrand

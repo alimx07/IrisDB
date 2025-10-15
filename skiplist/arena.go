@@ -1,7 +1,6 @@
 package skiplist
 
 import (
-	"math"
 	"sync/atomic"
 	"unsafe"
 
@@ -14,7 +13,10 @@ type Arena struct {
 	buf []byte
 	// loc represent curr position inside buf
 	// uint32 can support up to 2^32 = 4GB
-	loc atomic.Uint32
+	// But This will be tunned according to userConfig
+	// Default is 64MB
+	loc  atomic.Uint32
+	size atomic.Uint32
 }
 
 const (
@@ -28,6 +30,7 @@ func NewArena(n uint32) *Arena {
 	arena := &Arena{
 		buf: make([]byte, n),
 	}
+	arena.size.Store(n)
 	return arena
 }
 
@@ -35,20 +38,21 @@ func NewArena(n uint32) *Arena {
 func (arena *Arena) allocNode(h uint32, k []byte, v db.Value) (uint32, uint32, uint32, error) {
 
 	// Storing node metadata + key + value sequentially
-	// brings better data locallity (more cache hits)
-	// and faster bringing for data especially small size ones
+	// for better data locality (more cache hits)
 
-	// size of Node , key , value
+	// size of Node
 	// -1 as our h starts from 0
 	sz := MaxSize - ((MaxHeight - h - 1) * nodeLevelSize)
 	if sz > arena.getSize() {
 		return 0, 0, 0, ErrSizeFull
 	}
+
 	ks := uint32(len(k))
 	vs := v.GetSize()
 
 	// ensure that arena is 4 byte alignment
 	// as we will load and store in next atomically
+
 	// size of all our data
 	deltaLoc := sz + ks + vs + align
 	newLoc := arena.loc.Add(deltaLoc)
@@ -83,5 +87,5 @@ func (arena *Arena) getNodeOffset(node *Node) uint32 {
 }
 
 func (arena *Arena) getSize() uint32 {
-	return math.MaxUint32 - arena.loc.Load()
+	return arena.size.Load() - arena.loc.Load()
 }
