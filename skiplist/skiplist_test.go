@@ -198,6 +198,114 @@ func TestIteratorSnapshot(t *testing.T) {
 
 }
 
+func TestMergeIterator_MergesInOrder(t *testing.T) {
+	sl1 := NewSkipList(1 << 20)
+	sl2 := NewSkipList(1 << 20)
+
+	// sl1: even keys 0..18, sl2: odd keys 1..19
+	for i := 0; i < 20; i++ {
+		k := []byte(fmt.Sprintf("key-%03d", i))
+		v := []byte(fmt.Sprintf("val-%03d", i))
+		if i%2 == 0 {
+			sl1.Insert(db.NewKey(k), db.NewValue(v))
+		} else {
+			sl2.Insert(db.NewKey(k), db.NewValue(v))
+		}
+	}
+
+	mi := NewMergeIterator(sl1, sl2)
+
+	var got []string
+	for v := mi.Next(); v != nil; v = mi.Next() {
+		println(string(v))
+		got = append(got, string(v))
+	}
+
+	// Expect values in 0..19 order
+	var want []string
+	for i := 0; i < 20; i++ {
+		want = append(want, fmt.Sprintf("val-%03d", i))
+	}
+
+	if len(got) != len(want) {
+		t.Errorf("unexpected length: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMergeIterator_EmptySecond(t *testing.T) {
+	sl1 := NewSkipList(1 << 20)
+	sl2 := NewSkipList(1 << 20)
+
+	for i := 0; i < 10; i++ {
+		k := []byte(fmt.Sprintf("key-%03d", i))
+		v := []byte(fmt.Sprintf("val-%03d", i))
+		sl1.Insert(db.NewKey(k), db.NewValue(v))
+	}
+
+	mi := NewMergeIterator(sl1, sl2)
+
+	var got []string
+	for v := mi.Next(); v != nil; v = mi.Next() {
+		got = append(got, string(v))
+	}
+
+	var want []string
+	for i := 0; i < 10; i++ {
+		want = append(want, fmt.Sprintf("val-%03d", i))
+	}
+
+	if len(got) != len(want) {
+		t.Errorf("unexpected length: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMergeIterator_OneRunsOutEarly(t *testing.T) {
+	sl1 := NewSkipList(1 << 20)
+	sl2 := NewSkipList(1 << 20)
+
+	for i := 0; i < 5; i++ {
+		k := []byte(fmt.Sprintf("key-%03d", i))
+		v := []byte(fmt.Sprintf("val-%03d", i))
+		sl1.Insert(db.NewKey(k), db.NewValue(v))
+	}
+	for i := 5; i < 10; i++ {
+		k := []byte(fmt.Sprintf("key-%03d", i))
+		v := []byte(fmt.Sprintf("val-%03d", i))
+		sl2.Insert(db.NewKey(k), db.NewValue(v))
+	}
+
+	mi := NewMergeIterator(sl1, sl2)
+
+	var got []string
+	for v := mi.Next(); v != nil; v = mi.Next() {
+		got = append(got, string(v))
+	}
+
+	var want []string
+	for i := 0; i < 10; i++ {
+		want = append(want, fmt.Sprintf("val-%03d", i))
+	}
+
+	if len(got) != len(want) {
+		t.Errorf("unexpected length: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
 // Insert-only benchmarks for different value sizes
 func BenchmarkInsert(b *testing.B) {
 	lengths := []int{16, 256, 512}
