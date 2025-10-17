@@ -32,7 +32,7 @@ func NewWal(name string, pageSize uint16, fsync bool, syncInterval time.Duration
 	return w, nil
 }
 
-// Singe Wal Entry
+// Single Wal Entry
 type LogEntry struct {
 	Op    byte // Operation type
 	Key   []byte
@@ -91,7 +91,7 @@ func (w *WAL) deserializeEntry(data []byte) *LogEntry {
 	key := make([]byte, keyLen)
 	value := make([]byte, valueLen)
 
-	copy(key, data[7:9+keyLen])
+	copy(key, data[7:7+keyLen])
 	copy(value, data[7+keyLen:7+keyLen+valueLen])
 
 	return &LogEntry{

@@ -17,6 +17,10 @@ var (
 	DBName           = "irisdb"
 	MemTableSize     = 64 * 1024
 	AvgKeySize       = 16
+	SstableSize      = 128 * 1024 // size of sstable in level 0
+	SizeMultiple     = 5          // SizeLevel(i) = Multiple * SizeLevel(i-1)
+	TOMPOSTONE       = []byte{0xFD, 0xFE, 0xFA, 0xF9}
+	MaxLevels        = 6
 )
 
 const (
@@ -26,4 +30,5 @@ const (
 	WalExtension     = ".wal"
 	SSTABLEExtesnion = ".sst"
 	DBExtension      = ".irisdb"
+	MagicNumber      = 0xAB75DE95
 )
