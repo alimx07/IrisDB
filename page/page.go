@@ -47,6 +47,7 @@ func (pg *Page) syncProcess(syncInterval time.Duration) {
 	pg.wg.Add(1)
 	defer pg.wg.Done()
 	ticker := time.NewTicker(syncInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
@@ -64,13 +65,6 @@ func (pg *Page) syncProcess(syncInterval time.Duration) {
 func (pg *Page) Write(data []byte) (uint32, error) {
 
 	/*
-		WriteAt and ReadAt using Pwrite and Pread under the hood
-		Using Pwrite and Pread is better than Seek + Read :
-		1 - Lock Free (one atomic operation of seek and read)
-		2 - ONE syscall for the kernel instead of TWO
-	*/
-
-	/*
 		PAGE LAYOUT
 
 		----------------------------------
@@ -79,13 +73,20 @@ func (pg *Page) Write(data []byte) (uint32, error) {
 		----------------------------------
 	*/
 
+	/*
+		WriteAt and ReadAt using Pwrite and Pread under the hood
+		Using Pwrite and Pread is better than Seek + Read :
+		1 - Lock Free (one atomic operation of seek and read)
+		2 - ONE syscall for the kernel instead of TWO
+	*/
+
 	var err error
 	var newP uint32
 
 	pg.wg.Add(1)
 	defer pg.wg.Done()
 
-	// Used as max allocation per function will be pageSize
+	// max allocation per function will be pageSize
 	// despite of size of data size
 	buf := make([]byte, pg.pageSize)
 	// Data fits in One Page
@@ -122,7 +123,7 @@ func (pg *Page) Write(data []byte) (uint32, error) {
 			curr += x
 			_, err = pg.file.WriteAt(buf, off)
 			if err != nil {
-				return 0, nil
+				return 0, err
 			}
 		}
 	}
@@ -199,6 +200,16 @@ func (pg *Page) newPage(delta uint32) uint32 {
 	return pg.pageNum.Add(delta)
 }
 
+func (pg *Page) GetLastPage() uint32 {
+	return pg.pageNum.Load()
+}
+
+func (pg *Page) Size() uint32 {
+
+	// estimation of Page curr size
+	return pg.pageNum.Load() * uint32(pg.pageSize)
+}
+
 /*
 Iterator is used to iterate Page Struct concurrently
 
@@ -227,7 +238,7 @@ func (it *Iterator) Valid() bool {
 	return it.currNum.Load() <= it.pg.pageNum.Load()
 }
 
-// Retunr Curr value
+// return Curr value
 func (it *Iterator) Get(pgNum uint16) ([]byte, error) {
 	data, newPgNum, err := it.pg.Read(pgNum)
 	if err != nil {
