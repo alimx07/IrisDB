@@ -72,16 +72,20 @@ func (bf *Bloomfilter) Contains(data []byte) bool {
 	return true // maybe
 }
 
-func BytesTOSTruct(buf bytes.Buffer) *Bloomfilter {
-	dec := gob.NewDecoder(&buf)
-
-	var bf *Bloomfilter
-	dec.Decode(bf)
-	return bf
+func Deserialize(buf *bytes.Buffer) (*Bloomfilter, error) {
+	dec := gob.NewDecoder(buf)
+	var bf Bloomfilter // nil pointer panic
+	if err := dec.Decode(&bf); err != nil {
+		return nil, err
+	}
+	return &bf, nil
 }
 
-func (bf *Bloomfilter) StructToBytes(buf bytes.Buffer) error {
+func (bf *Bloomfilter) Serialize() ([]byte, error) {
+	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(&bf)
-	return err
+	if err := enc.Encode(bf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
