@@ -19,7 +19,7 @@ type Page struct {
 	close    chan struct{}
 	wg       *sync.WaitGroup // Used to ensure all concurrent operations ended
 	IsClosed atomic.Bool     // Make sure Page Closed from one Thread
-	pageNum  atomic.Uint32   // Number of pages (filesize/pagesize)
+	pageNum  atomic.Uint32   // Number of pages
 	pageSize uint16          // Size of Page (up to 64KB)
 	fsync    bool            // fsync or not
 }
@@ -204,46 +204,52 @@ func (pg *Page) GetLastPage() uint32 {
 	return pg.pageNum.Load()
 }
 
+// helper
+func (pg *Page) Name() string {
+	return pg.file.Name()
+}
+
 func (pg *Page) Size() uint32 {
 
-	// estimation of Page curr size
+	// estimation of Page(file) curr size
 	return pg.pageNum.Load() * uint32(pg.pageSize)
 }
 
 /*
 Iterator is used to iterate Page Struct concurrently
 
-Note : Iterator does not take a snapshot on Page at creation time so new data stored will be reflected in iterator
+TODO: Snapshot or NOT (Think about logic)
 */
 type Iterator struct {
 	pg      *Page
 	currNum atomic.Uint32
+
+	// there are two situations now:
+	// Iterator on keys: Do not read last 2 pages (Index + Magic)
+	// Other : Read All
+	// I keep it as variable for future possible situtions
+	end uint32
 }
 
-func Newiterator(pg *Page) *Iterator {
-	it := &Iterator{
-		pg: pg,
-	}
-	return it
+func Newiterator(pg *Page, end uint32) *Iterator {
+	return &Iterator{pg: pg, end: end}
 }
 
-// Next() points Iterator to next Value in file
-// and return pageNum
 func (it *Iterator) Next() uint32 {
 	return it.currNum.Load()
 }
 
 func (it *Iterator) Valid() bool {
-	// current pageNum in page struct
-	return it.currNum.Load() <= it.pg.pageNum.Load()
+	return it.currNum.Load() < it.pg.pageNum.Load()-it.end
 }
 
-// return Curr value
 func (it *Iterator) Get(pgNum uint16) ([]byte, error) {
 	data, newPgNum, err := it.pg.Read(pgNum)
 	if err != nil {
 		return nil, err
 	}
-	it.currNum.Store(uint32(newPgNum))
+	// Store the next readable page
+	// which is ourCurrLast + end
+	it.currNum.Store(uint32(newPgNum) + it.end)
 	return data, nil
 }
