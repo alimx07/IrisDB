@@ -11,27 +11,46 @@ const (
 	lenTs = 8
 )
 
-// key operations
-// New functions will be added
-
 func NewKey(k []byte) []byte {
 	t := time.Now().UnixNano()
-	return binary.BigEndian.AppendUint64(k, uint64(t))
+	result := make([]byte, len(k)+lenTs)
+	copy(result, k)
+	binary.BigEndian.PutUint64(result[len(k):], uint64(t))
+	return result
+}
 
+func NewKeyAt(k []byte, ts uint64) []byte {
+	result := make([]byte, len(k)+lenTs)
+	copy(result, k)
+	binary.BigEndian.PutUint64(result[len(k):], ts)
+	return result
+}
+
+func RawKey(internal []byte) []byte {
+	if len(internal) < lenTs {
+		return internal
+	}
+	return internal[:len(internal)-lenTs]
 }
 
 func CompareRawKeys(k1, k2 []byte) int {
-
-	// handle case of nil pointer of head
 	if len(k1) < lenTs {
 		return -1
 	}
-	return bytes.Compare(k1[:len(k1)-lenTs], k2[:len(k2)-lenTs])
+	raw1 := k1[:len(k1)-lenTs]
+	// k2 may be an internal key (len >= lenTs) or a pure raw key (len < lenTs).
+	var raw2 []byte
+	if len(k2) >= lenTs {
+		raw2 = k2[:len(k2)-lenTs]
+	} else {
+		raw2 = k2
+	}
+	return bytes.Compare(raw1, raw2)
 }
 
 func CompareKeysTs(k1, k2 []byte) int {
 	// negative to sort by Ts desc
-	// which means getNewKeys entires frist will search
+	// which means newer entries come first
 	return -(bytes.Compare(k1[len(k1)-lenTs:], k2[len(k2)-lenTs:]))
 }
 
