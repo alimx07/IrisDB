@@ -14,6 +14,10 @@ import (
 	"github.com/alimx07/IrisDB/db"
 )
 
+/*
+DISCLAMER : This Design is inspired from Facebook (ROCKSDB) inlineSkipList
+*/
+
 const (
 	MaxHeight = 25
 )
@@ -83,14 +87,14 @@ func NewSkipList(sz uint32) *SkipList {
 }
 
 // return the value of K
-func (sl *SkipList) Get(k []byte) db.Value {
+// func (sl *SkipList) Get(k []byte) (db.Value, bool) {
 
-	node, found := sl.seek(k, math.MaxUint64)
-	if found {
-		return db.NewValue(node.getVal(sl.arena))
-	}
-	return db.Value{}
-}
+// 	node, found := sl.seek(k, math.MaxUint64)
+// 	if found {
+// 		return db.NewValue(node.getVal(sl.arena)), true
+// 	}
+// 	return db.Value{}, false
+// }
 
 func (sl *SkipList) insert(k []byte, v db.Value, topLevel int, prev, succ *[MaxHeight]*Node) error {
 
@@ -143,15 +147,6 @@ func (sl *SkipList) Insert(k []byte, v db.Value) {
 
 func (sl *SkipList) InsertWithHints(k []byte, v db.Value, hint *Hint) error {
 
-	/*
-		    NOTE : This optimization is inspired from Facebook (ROCKSDB) inlineSkipList
-
-			THis Function will insert as normal but starting from Hint Node
-			which makes it powerful for sequential inserts that have some order
-			making insertion time from O(log N) to O(log D) where D is distance between
-			hint and the inserted node.
-
-	*/
 	if hint == nil {
 		return ErrNilHint
 	}
@@ -370,24 +365,32 @@ type Iterator struct {
 	ts     uint64 // timestamp of iterator creation
 }
 
-// The Iterator take a snapshot on Memtable at ts
-func Newiterator(sl *SkipList) *Iterator {
+// Newiterator creates an iterator snapshotted now or ts.
+func Newiterator(sl *SkipList, ts uint64) *Iterator {
 	sl.ref.Add(1)
-	return &Iterator{
-		ts: uint64(time.Now().UnixNano()),
-		sl: sl,
+	it := &Iterator{}
+	if ts == 0 {
+		it.ts = uint64(time.Now().UnixNano())
+	} else {
+		it.ts = ts
 	}
+	it.sl = sl
+	return it
 }
 
 // the iterator go in one direction for now
 
-// Seek node.key >= k at the time a request happens
-func (it *Iterator) Seek(k []byte) {
-	it.cursor, _ = it.sl.seek(k, it.ts)
+func (it *Iterator) Get(k []byte) (db.Value, bool) {
+	var found bool // false
+	it.cursor, found = it.sl.seek(k, it.ts)
+	if found {
+		return db.NewValue(it.cursor.getVal(it.sl.arena)), true
+	}
+	return db.Value{}, false
 }
 
 // Get Value of current Key
-func (it *Iterator) Get() []byte {
+func (it *Iterator) GetVal() []byte {
 	return it.cursor.getVal(it.sl.arena)
 }
 
@@ -397,16 +400,12 @@ func (it *Iterator) GetKey() []byte {
 }
 
 // GO to the next node
+// Memtable will be frozen here.
 func (it *Iterator) Next() {
-	for {
-		it.cursor = it.cursor.nextNode(0, it.sl.arena)
-		if it.cursor == nil {
-			return
-		}
-		if it.ts >= db.GetTsAsUint64(it.cursor.getKey(it.sl.arena)) {
-			break
-		}
-	}
+	it.cursor = it.cursor.nextNode(0, it.sl.arena)
+	// if it.cursor == nil {
+	// 	return
+	// }
 }
 
 // Ensure we on valid node and not the end
@@ -418,6 +417,29 @@ func (it *Iterator) SeekToStart() {
 	it.cursor = it.sl.head
 	// go to the next node after the head
 	it.Next()
+}
+
+// SeekToKey positions the cursor at the first node raw key >= rawKey.
+func (it *Iterator) SeekToKey(internalKey []byte) {
+	it.cursor, _ = it.sl.seek(internalKey, math.MaxUint64)
+}
+
+// RawKey returns the raw user key..
+func (it *Iterator) RawKey() []byte {
+	k := it.cursor.getKey(it.sl.arena)
+	if len(k) < 8 {
+		return k
+	}
+	return k[:len(k)-8]
+}
+
+// Timestamp returns the write timestamp.
+func (it *Iterator) Timestamp() uint64 {
+	k := it.cursor.getKey(it.sl.arena)
+	if len(k) < 8 {
+		return 0
+	}
+	return db.GetTsAsUint64(k)
 }
 
 func (it *Iterator) Close() {
@@ -432,8 +454,8 @@ type MergeIterator struct {
 }
 
 func NewMergeIterator(mem1, mem2 *SkipList) *MergeIterator {
-	it1 := Newiterator(mem1)
-	it2 := Newiterator(mem2)
+	it1 := Newiterator(mem1, 0)
+	it2 := Newiterator(mem2, 0)
 	it1.SeekToStart()
 	it2.SeekToStart()
 	return &MergeIterator{first: it1, second: it2}
@@ -445,22 +467,22 @@ func (mems MergeIterator) Next() []byte {
 	}
 	// one side exhausted
 	if !mems.first.Valid() {
-		v := mems.second.Get()
+		v := mems.second.GetVal()
 		mems.second.Next()
 		return v
 	}
 	if !mems.second.Valid() {
-		v := mems.first.Get()
+		v := mems.first.GetVal()
 		mems.first.Next()
 		return v
 	}
 
 	if bytes.Compare(mems.first.GetKey(), mems.second.GetKey()) <= 0 {
-		v := mems.first.Get()
+		v := mems.first.GetVal()
 		mems.first.Next()
 		return v
 	}
-	v := mems.second.Get()
+	v := mems.second.GetVal()
 	mems.second.Next()
 	return v
 }

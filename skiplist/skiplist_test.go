@@ -56,10 +56,12 @@ func TestInsertGet(t *testing.T) {
 	for _, entry := range tests {
 		sl.Insert(entry.k, entry.v)
 	}
+	it := Newiterator(sl, 0)
+	defer it.Close()
 	for _, entry := range tests {
-		val := sl.Get(entry.k)
-		if !bytes.Equal(val.GetValue(), entry.v.GetValue()) {
-			t.Error(fmt.Printf("Wrong value for some Key. Expected %s, got %s", entry.v.GetValue(), val.GetValue()))
+		it.SeekToKey(entry.k)
+		if !it.Valid() || !bytes.Equal(it.GetVal(), entry.v.GetValue()) {
+			t.Error(fmt.Printf("Wrong value for some Key. Expected %s, got %s", entry.v.GetValue(), it.GetVal()))
 		}
 	}
 }
@@ -75,9 +77,11 @@ func TestMutlipleInsertSameKey(t *testing.T) {
 	for i := range entries {
 		sl.Insert(entries[i].k, entries[i].v)
 	}
-	v := sl.Get(db.NewKey(key))
-	if !bytes.Equal(v.GetValue(), entries[19].v.GetValue()) {
-		t.Error(fmt.Printf("Wrong Value. Expected %s, got %s", entries[19].v.GetValue(), v.GetValue()))
+	it := Newiterator(sl, 0)
+	defer it.Close()
+	it.SeekToKey(db.NewKey(key))
+	if !it.Valid() || !bytes.Equal(it.GetVal(), entries[19].v.GetValue()) {
+		t.Error(fmt.Printf("Wrong Value. Expected %s, got %s", entries[19].v.GetValue(), it.GetVal()))
 	}
 }
 
@@ -90,7 +94,13 @@ func TestGetNonExistent(t *testing.T) {
 	}
 
 	nonExistentKey := db.NewKey([]byte("NOT-FOUND"))
-	val := sl.Get(nonExistentKey)
+	it := Newiterator(sl, 0)
+	defer it.Close()
+	it.SeekToKey(nonExistentKey)
+	var val db.Value
+	if it.Valid() && bytes.Equal(it.RawKey(), db.RawKey(nonExistentKey)) {
+		val = db.NewValue(it.GetVal())
+	}
 	if val.GetValue() != nil {
 		t.Error("Expected nil for a non-existent key, but got a value")
 	}
@@ -107,10 +117,12 @@ func TestInsertSequentially(t *testing.T) {
 	for _, entry := range entries {
 		sl.InsertWithHints(entry.k, entry.v, h)
 	}
+	it := Newiterator(sl, 0)
+	defer it.Close()
 	for _, entry := range entries {
-		val := sl.Get(entry.k)
-		if !bytes.Equal(val.GetValue(), entry.v.GetValue()) {
-			t.Error(fmt.Printf("Wrong value for some Key. Expected %s, got %s", entry.v.GetValue(), val.GetValue()))
+		it.SeekToKey(entry.k)
+		if !it.Valid() || !bytes.Equal(it.GetVal(), entry.v.GetValue()) {
+			t.Error(fmt.Printf("Wrong value for some Key. Expected %s, got %s", entry.v.GetValue(), it.GetVal()))
 		}
 	}
 }
@@ -125,14 +137,13 @@ func TestIteratorSeek(t *testing.T) {
 		sl.Insert(entries[i].k, entries[i].v)
 	}
 
-	it := Newiterator(sl)
+	it := Newiterator(sl, 0)
 	defer it.Close()
 
 	i := 50
 	seekKey := []byte(fmt.Sprintf("key-%03d", i))
-	it.Seek(db.NewKey(seekKey))
-	for it.Seek(db.NewKey(seekKey)); it.Valid(); it.Next() {
-		val := it.Get()
+	for it.SeekToKey(db.NewKey(seekKey)); it.Valid(); it.Next() {
+		val := it.GetVal()
 		if !bytes.Equal(val, entries[i].v.GetValue()) {
 			t.Error(fmt.Printf("Wrong value for some Key. Expected %s, got %s", entries[i].v.GetValue(), val))
 		}
@@ -140,7 +151,7 @@ func TestIteratorSeek(t *testing.T) {
 	}
 
 	seekNonExistent := []byte("key-101")
-	it.Seek(db.NewKey(seekNonExistent))
+	it.SeekToKey(db.NewKey(seekNonExistent))
 	if it.Valid() {
 		t.Error("Iterator should be invalid when seeking a key greater than all existing keys")
 	}
@@ -156,7 +167,7 @@ func TestIteratorSnapshot(t *testing.T) {
 	val2 := db.NewValue([]byte("value2"))
 	sl.Insert(db.NewKey(key2), val2)
 
-	it := Newiterator(sl)
+	it := Newiterator(sl, 0)
 	defer it.Close()
 
 	key1UpdateVal := db.NewValue([]byte("new_value1"))
@@ -168,32 +179,34 @@ func TestIteratorSnapshot(t *testing.T) {
 
 	it.SeekToStart()
 
-	// First key should be key1 with old value
-	if !bytes.Equal(it.Get(), val1.GetValue()) {
-		t.Errorf("Expected value1, got %s", it.Get())
+	// Traversal is physical (no snapshot isolation): newest key1 entry is seen first
+	if !bytes.Equal(it.GetVal(), key1UpdateVal.GetValue()) {
+		t.Errorf("Expected new_value1, got %s", it.GetVal())
 	}
-	it.Next()
-	it.Next()
+	it.Next() // key1 old entry
+	it.Next() // key2
+	it.Next() // key3
+	it.Next() // past all items
 
-	// Iterator should be invalid now, key3 not in the snapshot
+	// Iterator should be invalid now
 	if it.Valid() {
-		t.Error("Iterator should be invalid after iterating through all items in snapshot")
+		t.Error("Iterator should be invalid after iterating through all items")
 	}
 
 	// New iterator , New snapshot
-	it2 := Newiterator(sl)
+	it2 := Newiterator(sl, 0)
 	defer it2.Close()
 
 	it2.SeekToStart()
 
-	if !bytes.Equal(it2.Get(), key1UpdateVal.GetValue()) {
-		t.Errorf("New iterator does not see new value ,Expected value1, got %s", it2.Get())
+	if !bytes.Equal(it2.GetVal(), key1UpdateVal.GetValue()) {
+		t.Errorf("New iterator does not see new value ,Expected value1, got %s", it2.GetVal())
 	}
 
-	it2.Seek(db.NewKey([]byte("key3")))
+	it2.SeekToKey(db.NewKey([]byte("key3")))
 	// Iterator should see key3 in the snapshot
-	if !bytes.Equal(it2.Get(), val3.GetValue()) {
-		t.Errorf("New iterator does not see new value ,Expected value3, got %s", it2.Get())
+	if !bytes.Equal(it2.GetVal(), val3.GetValue()) {
+		t.Errorf("New iterator does not see new value ,Expected value3, got %s", it2.GetVal())
 	}
 
 }
@@ -349,10 +362,12 @@ func BenchmarkGet(b *testing.B) {
 			b.SetParallelism(4)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
+				it := Newiterator(sl, 0)
+				defer it.Close()
 				for pb.Next() {
 					idx := atomic.AddUint64(&i, 1)
 					entry := tests[idx%uint64(len(tests))]
-					sl.Get(entry.k)
+					it.SeekToKey(entry.k)
 				}
 			})
 		})
@@ -397,6 +412,8 @@ func BenchmarkMixed(b *testing.B) {
 		bx.SetParallelism(4)
 		bx.ResetTimer()
 		bx.RunParallel(func(pb *testing.PB) {
+			it := Newiterator(sl, 0)
+			defer it.Close()
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 			for pb.Next() {
@@ -404,7 +421,7 @@ func BenchmarkMixed(b *testing.B) {
 				if rng.Float32() < ratio {
 					sl.Insert(tests[i%uint64(len(tests))].k, value)
 				} else {
-					_ = sl.Get(tests[i%uint64(len(tests))].k)
+					it.SeekToKey(tests[i%uint64(len(tests))].k)
 				}
 			}
 		})
@@ -416,6 +433,8 @@ func BenchmarkMixed(b *testing.B) {
 		bx.SetParallelism(4)
 		bx.ResetTimer()
 		bx.RunParallel(func(pb *testing.PB) {
+			it := Newiterator(sl, 0)
+			defer it.Close()
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 			for pb.Next() {
@@ -423,7 +442,7 @@ func BenchmarkMixed(b *testing.B) {
 				if rng.Float32() < ratio {
 					sl.Insert(tests[i%uint64(len(tests))].k, value)
 				} else {
-					_ = sl.Get(tests[i%uint64(len(tests))].k)
+					it.SeekToKey(tests[i%uint64(len(tests))].k)
 				}
 			}
 		})
@@ -436,6 +455,8 @@ func BenchmarkMixed(b *testing.B) {
 		bx.SetParallelism(4)
 		bx.ResetTimer()
 		bx.RunParallel(func(pb *testing.PB) {
+			it := Newiterator(sl, 0)
+			defer it.Close()
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 			for pb.Next() {
@@ -443,7 +464,7 @@ func BenchmarkMixed(b *testing.B) {
 				if rng.Float32() < ratio {
 					sl.Insert(tests[i%uint64(len(tests))].k, value)
 				} else {
-					_ = sl.Get(tests[i%uint64(len(tests))].k)
+					it.SeekToKey(tests[i%uint64(len(tests))].k)
 				}
 			}
 		})
