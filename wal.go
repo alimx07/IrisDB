@@ -75,7 +75,7 @@ func (w *WAL) serializeEntry(entry *LogEntry) []byte {
 	data := make([]byte, 7+keyLen+valueLen)
 
 	data[0] = entry.Op
-	binary.BigEndian.PutUint32(data[1:3], uint32(keyLen))
+	binary.BigEndian.PutUint16(data[1:3], uint16(keyLen))
 	binary.BigEndian.PutUint32(data[3:7], uint32(valueLen))
 	copy(data[7:], entry.Key)
 	copy(data[7+keyLen:], entry.Value)
@@ -85,14 +85,14 @@ func (w *WAL) serializeEntry(entry *LogEntry) []byte {
 
 func (w *WAL) deserializeEntry(data []byte) *LogEntry {
 	op := data[0]
-	keyLen := binary.BigEndian.Uint32(data[1:3])
+	keyLen := binary.BigEndian.Uint16(data[1:3])
 	valueLen := binary.BigEndian.Uint32(data[3:7])
 
 	key := make([]byte, keyLen)
 	value := make([]byte, valueLen)
 
 	copy(key, data[7:7+keyLen])
-	copy(value, data[7+keyLen:7+keyLen+valueLen])
+	copy(value, data[7+keyLen:7+uint32(keyLen)+valueLen])
 
 	return &LogEntry{
 		Op:    op,
@@ -103,7 +103,7 @@ func (w *WAL) deserializeEntry(data []byte) *LogEntry {
 
 // Replay replays all WAL entries using an iterator
 func (w *WAL) Replay(fn func(*LogEntry) error) error {
-	it := page.Newiterator(w.page)
+	it := page.Newiterator(w.page, 0)
 
 	for it.Valid() {
 		pgNum := it.Next()
@@ -119,6 +119,11 @@ func (w *WAL) Replay(fn func(*LogEntry) error) error {
 	}
 
 	return nil
+}
+
+// Path returns the file path of the WAL.
+func (w *WAL) Path() string {
+	return w.page.Name()
 }
 
 // Close closes the WAL
