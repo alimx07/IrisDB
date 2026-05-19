@@ -4,10 +4,9 @@ An LSM-tree key-value store written in Go. Every write is timestamped, enabling 
 
 ## Roadmap
 
-- [ ] **v1** : LSM database :)
-- [ ] **v1.x** : Expose Prometheus metrics
-- [ ] **v2** : Let`s see K8s | add Kubernetes operator
-- [ ] **v3** :  Maybe MCP integration
+- [x] **v1** : LSM database :)
+- [ ] **v2** : Expose Prometheus metrics
+- [ ] **v3** : Let`s see K8s | add Kubernetes operator
 
 
 ---
