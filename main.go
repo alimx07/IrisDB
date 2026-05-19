@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -273,38 +274,43 @@ func (idb *IrisDB) put(key, value []byte, hint *Hint) error {
 }
 
 func (idb *IrisDB) maybeFlush() error {
-
-	// if remaning space <= 10% , Flush
 	if idb.currMem.m.GetSize() >= uint32(MemTableSize)/10 {
 		return nil
 	}
-
-	go func() {
-		idb.muMem.Lock()
-		defer idb.mu.Unlock()
-		idb.frozenMem = idb.currMem
-		idb.currMem = idb.newMemtableState(true)
-		idb.rotateMemtable()
-	}()
-
+	if idb.frozenMem != nil {
+		return nil // previous flush still running
+	}
+	next := idb.newMemtableState(true)
+	if next == nil {
+		return errors.New("failed to create memtable")
+	}
+	// Swap happens here under mu.Lock (held by put), so new writes go to
+	// the fresh arena immediately without racing with the flush goroutine.
+	frozen := idb.currMem
+	idb.frozenMem = frozen
+	idb.currMem = next
+	go idb.flushFrozen(frozen)
 	return nil
 }
 
-func (idb *IrisDB) rotateMemtable() error {
-
-	sst, err := memToSST(idb.frozenMem.m, 0, idb.dbPath)
-	if err != nil {
-		return err
+func (idb *IrisDB) flushFrozen(frozen *MemTableState) {
+	sst, err := memToSST(frozen.m, 0, idb.dbPath)
+	if err == nil {
+		idb.mu.Lock()
+		idb.sstables[0] = append(idb.sstables[0], sst)
+		idb.mu.Unlock()
 	}
-	idb.sstables[0] = append(idb.sstables[0], sst)
 
-	walPath := idb.frozenMem.wal.Path()
-	idb.frozenMem.wal.Close()
+	idb.muMem.Lock()
+	if idb.frozenMem == frozen {
+		idb.frozenMem = nil
+	}
+	idb.muMem.Unlock()
+
+	walPath := frozen.wal.Path()
+	frozen.wal.Close()
 	os.Remove(walPath)
-
-	idb.frozenMem.m.Close()
-
-	return nil
+	frozen.m.Close()
 }
 
 func (idb *IrisDB) newMemtableState(createWal bool) *MemTableState {
@@ -344,6 +350,7 @@ func (idb *IrisDB) Get(key []byte) ([]byte, error) {
 	}
 
 	idb.muMem.RLock()
+	defer idb.muMem.RUnlock()
 
 	if idb.frozenMem != nil {
 		it = skiplist.Newiterator(idb.frozenMem.m, math.MaxUint64)
@@ -357,8 +364,6 @@ func (idb *IrisDB) Get(key []byte) ([]byte, error) {
 			return v, nil
 		}
 	}
-
-	idb.muMem.RUnlock()
 
 	for _, sstLevel := range idb.sstables {
 		for _, sst := range sstLevel {
@@ -395,10 +400,9 @@ func (idb *IrisDB) GetBefore(key []byte, ts time.Time) (*Entry, error) {
 	defer idb.mu.RUnlock()
 
 	it := skiplist.Newiterator(idb.currMem.m, tsNano)
-	val, found := it.Get(searchKey)
-	it.Close()
-	if found {
-		v := val.GetValue()
+	it.Get(searchKey)
+	if it.Valid() && bytes.Equal(it.RawKey(), key) && it.Timestamp() <= tsNano {
+		v := it.GetVal()
 		writtenAt := time.Unix(0, int64(it.Timestamp()))
 		it.Close()
 		if bytes.Equal(v, TOMPOSTONE) {
@@ -408,16 +412,16 @@ func (idb *IrisDB) GetBefore(key []byte, ts time.Time) (*Entry, error) {
 		copy(cp, v)
 		return &Entry{Value: cp, Time: writtenAt}, nil
 	}
+	it.Close()
 
 	idb.muMem.RLock()
+	defer idb.muMem.RUnlock()
 
 	if idb.frozenMem != nil {
-
 		it = skiplist.Newiterator(idb.frozenMem.m, tsNano)
-		val, found = it.Get(searchKey)
-		it.Close()
-		if found {
-			v := val.GetValue()
+		it.Get(searchKey)
+		if it.Valid() && bytes.Equal(it.RawKey(), key) && it.Timestamp() <= tsNano {
+			v := it.GetVal()
 			writtenAt := time.Unix(0, int64(it.Timestamp()))
 			it.Close()
 			if bytes.Equal(v, TOMPOSTONE) {
@@ -427,9 +431,8 @@ func (idb *IrisDB) GetBefore(key []byte, ts time.Time) (*Entry, error) {
 			copy(cp, v)
 			return &Entry{Value: cp, Time: writtenAt}, nil
 		}
+		it.Close()
 	}
-
-	idb.muMem.RUnlock()
 
 	for _, sstLevel := range idb.sstables {
 		for _, sst := range sstLevel {
@@ -537,6 +540,111 @@ func (idb *IrisDB) GetRange(key []byte, ts1, ts2 time.Time) ([]*Entry, error) {
 
 	// Results already sorted.
 	// It is a granutee by design
+	return results, nil
+}
+
+// Scan returns all Entries [start, end]
+// GetRange but for keys
+func (idb *IrisDB) Scan(start, end []byte) ([]*Entry, error) {
+	idb.mu.RLock()
+	defer idb.mu.RUnlock()
+
+	type candidate struct {
+		val []byte
+		ts  uint64
+	}
+	seen := make(map[string]*candidate)
+
+	scanMem := func(m *skiplist.SkipList) {
+		it := skiplist.Newiterator(m, math.MaxUint64)
+		if start != nil {
+			it.SeekToKey(db.NewKeyAt(start, math.MaxUint64))
+		} else {
+			it.SeekToStart()
+		}
+		for it.Valid() {
+			rk := it.RawKey()
+			if end != nil && bytes.Compare(rk, end) > 0 {
+				break
+			}
+			k := string(rk)
+			ts := it.Timestamp()
+			if c, exists := seen[k]; !exists || ts > c.ts {
+				v := it.GetVal()
+				cp := make([]byte, len(v))
+				copy(cp, v)
+				seen[k] = &candidate{val: cp, ts: ts}
+			}
+			it.Next()
+		}
+		it.Close()
+	}
+
+	scanMem(idb.currMem.m)
+
+	idb.muMem.RLock()
+	if idb.frozenMem != nil {
+		scanMem(idb.frozenMem.m)
+	}
+	idb.muMem.RUnlock()
+
+	for _, sstLevel := range idb.sstables {
+		for _, sst := range sstLevel {
+			if sst == nil {
+				continue
+			}
+			keys, err := sst.allKeys()
+			if err != nil {
+				return nil, err
+			}
+			for _, ke := range keys {
+				// ke : [valPgNum(2) | rawKey | ts(8)]
+				if len(ke) < 11 { // 2 + min 1 raw byte + 8
+					continue
+				}
+				internal := ke[2:]            // rawKey + ts(8)
+				rawKey := db.RawKey(internal) // strips ts
+				ts := db.GetTsAsUint64(internal)
+				if start != nil && bytes.Compare(rawKey, start) < 0 {
+					continue
+				}
+				if end != nil && bytes.Compare(rawKey, end) > 0 {
+					continue
+				}
+				k := string(rawKey)
+				if c, exists := seen[k]; exists && c.ts >= ts {
+					continue
+				}
+				valPgNum := binary.BigEndian.Uint16(ke[:2])
+				val, _, err := sst.vals.Read(valPgNum)
+				if err != nil {
+					return nil, err
+				}
+				cp := make([]byte, len(val))
+				copy(cp, val)
+				seen[k] = &candidate{val: cp, ts: ts}
+			}
+		}
+	}
+
+	sortedKeys := make([]string, 0, len(seen))
+	for k := range seen {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	results := make([]*Entry, 0, len(sortedKeys))
+	for _, k := range sortedKeys {
+		c := seen[k]
+		if bytes.Equal(c.val, TOMPOSTONE) {
+			continue
+		}
+		results = append(results, &Entry{
+			Key:   []byte(k),
+			Value: c.val,
+			Time:  time.Unix(0, int64(c.ts)),
+		})
+	}
 	return results, nil
 }
 
