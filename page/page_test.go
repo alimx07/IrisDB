@@ -137,7 +137,7 @@ func TestIterator(t *testing.T) {
 	data := []byte("IRISDB_ITERATOR")
 	pageNum, _ := pg.Write(data)
 
-	it := Newiterator(pg)
+	it := Newiterator(pg, 0)
 	if !it.Valid() {
 		t.Error("Iterator should be valid initially")
 	}

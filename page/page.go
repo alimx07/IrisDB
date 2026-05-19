@@ -36,6 +36,9 @@ func InitPage(name string, flag int, perm os.FileMode, pageSize uint16, fsync bo
 		close:    make(chan struct{}),
 	}
 	pg.wg = &sync.WaitGroup{}
+	if info, err := file.Stat(); err == nil && pageSize > 0 {
+		pg.pageNum.Store(uint32(info.Size()) / uint32(pageSize))
+	}
 	if fsync {
 		pg.fsync = true
 		go pg.syncProcess(syncInterval)
@@ -250,6 +253,6 @@ func (it *Iterator) Get(pgNum uint16) ([]byte, error) {
 	}
 	// Store the next readable page
 	// which is ourCurrLast + end
-	it.currNum.Store(uint32(newPgNum) + it.end)
+	it.currNum.Store(uint32(newPgNum) + 1)
 	return data, nil
 }
