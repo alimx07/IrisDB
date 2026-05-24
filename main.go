@@ -55,6 +55,7 @@ type MemTableState struct {
 
 type IrisDB struct {
 	mu        sync.RWMutex
+	walMu     sync.Mutex // serializes WAL writes; narrower than mu so concurrent skiplist inserts proceed
 	sstables  [][]*SSTABLE
 	currMem   *MemTableState
 	frozenMem *MemTableState
@@ -246,49 +247,75 @@ func (idb *IrisDB) Delete(key []byte) error {
 
 // helper function
 func (idb *IrisDB) put(key, value []byte, hint *Hint) error {
-
-	// TODO: Try to reduce Lock path
-
-	idb.mu.Lock()
-	defer idb.mu.Unlock()
-
 	tsKey := db.NewKey(key)
 
-	if _, err := idb.currMem.wal.Write(&LogEntry{Op: OpPut, Key: tsKey, Value: value}); err != nil {
-		return err
+	// RLock allows many concurrent writers and readers; walMu serializes only WAL appends.
+	idb.mu.RLock()
+	idb.walMu.Lock()
+	_, walErr := idb.currMem.wal.Write(&LogEntry{Op: OpPut, Key: tsKey, Value: value})
+	idb.walMu.Unlock()
+	if walErr != nil {
+		idb.mu.RUnlock()
+		return walErr
 	}
 
-	var err error
-	// no hint given
+	var insertErr error
 	if hint == nil {
-		err = idb.currMem.m.Insert(tsKey, db.NewValue(value))
+		insertErr = idb.currMem.m.Insert(tsKey, db.NewValue(value))
 	} else {
-		err = idb.currMem.m.InsertWithHints(tsKey, db.NewValue(value), hint.inner)
+		insertErr = idb.currMem.m.InsertWithHints(tsKey, db.NewValue(value), hint.inner)
 	}
+	idb.mu.RUnlock()
 
-	if err != nil {
-		return err
+	if insertErr != nil {
+		return insertErr
 	}
-
 	return idb.maybeFlush()
 }
 
 func (idb *IrisDB) maybeFlush() error {
+	// Fast path: avoid lock acquisition when there is still space.
+	idb.mu.RLock()
+	remaining := idb.currMem.m.GetSize()
+	idb.mu.RUnlock()
+	if remaining >= uint32(MemTableSize)/10 {
+		return nil
+	}
+
+	idb.muMem.RLock()
+	hasFrozen := idb.frozenMem != nil
+	idb.muMem.RUnlock()
+	if hasFrozen {
+		return nil
+	}
+
+	// Slow path: take write lock to swap memtables.
+	// Blocks until all in-flight put() calls release their RLock.
+	idb.mu.Lock()
+	defer idb.mu.Unlock()
+
+	// Double-check: another goroutine may have already swapped while we waited.
 	if idb.currMem.m.GetSize() >= uint32(MemTableSize)/10 {
 		return nil
 	}
-	if idb.frozenMem != nil {
-		return nil // previous flush still running
+	idb.muMem.RLock()
+	hasFrozen = idb.frozenMem != nil
+	idb.muMem.RUnlock()
+	if hasFrozen {
+		return nil
 	}
+
 	next := idb.newMemtableState(true)
 	if next == nil {
 		return errors.New("failed to create memtable")
 	}
-	// Swap happens here under mu.Lock (held by put), so new writes go to
-	// the fresh arena immediately without racing with the flush goroutine.
 	frozen := idb.currMem
-	idb.frozenMem = frozen
 	idb.currMem = next
+
+	idb.muMem.Lock()
+	idb.frozenMem = frozen
+	idb.muMem.Unlock()
+
 	go idb.flushFrozen(frozen)
 	return nil
 }
